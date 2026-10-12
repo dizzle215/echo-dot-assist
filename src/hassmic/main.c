@@ -764,6 +764,18 @@ static const struct { const char *amazon, *event; } sound_map[] = {
 const char *const core_sound_events[] = { "smoke_or_co_alarm", "glass_break", "dog_bark", "baby_cry", "snoring", "cough",
                                           "water", "beeping_appliance" };
 const int core_sound_nevents = sizeof core_sound_events / sizeof core_sound_events[0];
+
+/* The top buttons for Home Assistant (core.h).  Reported in addition to what the key does here: an automation on the
+ * action button cannot be told apart from the Echo's own use of it, and the Echo's use must not depend on Home Assistant. */
+const char *const core_button_events[] = { "action", "action_hold", "volume_up", "volume_up_hold", "volume_down", "volume_down_hold" };
+const int core_button_nevents = sizeof core_button_events / sizeof core_button_events[0];
+
+static void button_event(const char *event)
+{
+    pthread_mutex_lock(&core_lock);
+    if (connected && proto->button) proto->button(event);
+    pthread_mutex_unlock(&core_lock);
+}
 #define SOUND_WINDOW_MS 11000               /* a scoring window (9.98 s) and the decoder's lag behind it */
 static atomic_int sound_want;               /* the switch; the capture thread opens and closes the decoder to match */
 static atomic_int sound_failed;             /* the last start failed (the model did not load): the settings page says so */
@@ -1524,6 +1536,7 @@ static void *earcon_thread(void *arg)
  * what the button paused; else talk */
 static void on_action(void)
 {
+    button_event("action");                            /* Home Assistant hears every press, whatever it does here */
     if (web_approve()) return;                          /* a login of the settings page waited for this press */
     if (improv_authorize()) return;                     /* a phone setting up the network did */
     if (dropin_running() && dropin_button()) return;    /* a Drop In rang (answered) or ran (ended) */
@@ -1537,6 +1550,8 @@ static void on_action(void)
 /* Action button held: at 5 s the ring warns, at 10 s everything is forgotten (core_reset).  acebuttond still sees the
  * button: its 5 s hold starts Amazon's setup, whose services are stopped (nothing happens, checked: PLAN.md), and its
  * 21 s hold is Amazon's factory reset, which the reset here comes long before. */
+static void on_action_hold(void) { button_event("action_hold"); }      /* 1 s: nothing on the Echo itself below the 5 s stage */
+
 static void on_hold(int stage)
 {
     if (stage == 1) { led("-s", "factory-reset"); fprintf(stderr, "action button held 5 s: reset at 10 s\n"); }
@@ -1783,12 +1798,15 @@ static void volume_sync(void)
 
 static void on_volume(int dir)
 {
+    button_event(dir > 0 ? "volume_up" : "volume_down");
     if (!use_volume) return;
     pthread_mutex_lock(&core_lock);
     core_set_volume((core_volume() + 5) / 10 * 10 + dir * 10);
     sound_request(SND_VOLUME);
     pthread_mutex_unlock(&core_lock);
 }
+
+static void on_volume_hold(int dir) { button_event(dir > 0 ? "volume_up_hold" : "volume_down_hold"); }     /* the press stepped already */
 
 static void *volume_led_thread(void *arg)
 {
@@ -2072,7 +2090,7 @@ int main(int argc, char **argv)
     pthread_create(&ear_t, NULL, earcon_thread, NULL);
     { pthread_t vol_t; pthread_create(&vol_t, NULL, volume_led_thread, NULL); pthread_detach(vol_t); }
 
-    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold };
+    static const struct button_handler buttons = { on_action, on_mute, on_volume, on_pair, on_hold, on_action_hold, on_volume_hold };
     if (buttons_start(input, &buttons) < 0) fprintf(stderr, "buttons: %s not available\n", input);
     else if (buttons_muted()) on_mute(1);
 

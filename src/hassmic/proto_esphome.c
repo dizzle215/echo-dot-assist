@@ -109,7 +109,7 @@ enum { KEY_NOISE = 2, KEY_MIC_LEVEL, KEY_MULT, KEY_MUTE, KEY_WAKE_SOUND, KEY_SEN
        KEY_BT_OUT_SEARCH, KEY_BT_OUT, KEY_BT_OUT_STATUS, KEY_BT_OUT_DELAY, KEY_WIFI_MOTION_ON, KEY_WIFI_MOTION, KEY_WIFI_MOTION_SENS,
        KEY_UPDATE_CHANNEL, KEY_UPDATE, KEY_WHISPERED, KEY_ARB_HANDOFF, KEY_WEB_URL, KEY_IDENTIFY, KEY_RESET,
        KEY_TIMER_RINGING, KEY_TIMER_NAMES, KEY_DROPIN_SERVICE, KEY_DROPIN_STATE, KEY_DROPIN_PEER, KEY_DROPIN_END, KEY_RESTART,
-       KEY_DROPIN_RESULT, KEY_TIMER_STOP };
+       KEY_DROPIN_RESULT, KEY_TIMER_STOP, KEY_BUTTON };
 enum { MP_KEY = 1, MP_IDLE = 1, MP_PLAYING = 2, MP_CMD_STOP = 2, MP_CMD_MUTE = 3, MP_CMD_UNMUTE = 4 };
 #define MEDIA_RATE 48000        /* what we ask Home Assistant to transcode announcements and media to: WAV mono s16 */
 
@@ -497,6 +497,11 @@ static void send_setting_entities(void)
      * time, automations trigger on the type. */
     if (listed(KEY_SOUND)) { PB(b, 384); pb_str(&b, 1, "sound"); pb_fixed32(&b, 2, KEY_SOUND); pb_str(&b, 3, "Sound"); pb_str(&b, 5, "mdi:waveform");
       for (int i = 0; i < core_sound_nevents; i++) pb_str(&b, 9, core_sound_events[i]);
+      send_msg(LIST_EVENT, &b); }
+    /* The top buttons (core_button_events): always there, device class button, a type per key and per hold of it */
+    { PB(b, 256); pb_str(&b, 1, "button"); pb_fixed32(&b, 2, KEY_BUTTON); pb_str(&b, 3, "Button"); pb_str(&b, 5, "mdi:gesture-tap-button");
+      pb_str(&b, 8, "button");
+      for (int i = 0; i < core_button_nevents; i++) pb_str(&b, 9, core_button_events[i]);
       send_msg(LIST_EVENT, &b); }
     if (listed(KEY_BT_PAIRING)) { PB(b, 128); pb_str(&b, 1, "bluetooth_pairing"); pb_fixed32(&b, 2, KEY_BT_PAIRING); pb_str(&b, 3, "Bluetooth pairing");
       pb_str(&b, 5, "mdi:bluetooth-connect"); send_msg(LIST_SWITCH, &b); }
@@ -1620,6 +1625,12 @@ static void dropin_result(const char *result)   /* lock held */
     if (listed(KEY_DROPIN_RESULT)) send_state(EVENT, &b);
 }
 
+static void button(const char *event)   /* lock held */
+{
+    PB(b, 64); pb_fixed32(&b, 1, KEY_BUTTON); pb_str(&b, 2, event); send_state(EVENT, &b);
+    fprintf(stderr, "button: %s\n", event);
+}
+
 const struct proto proto_esphome = { "esphome", 26053, 1, serve, start, audio, stop, cancel, played, volume_changed, mute_changed, print_mdns, bt_device,
                                      arb_send, arb_changed, sound, whispered, arb_request, settings_changed, entities_changed, arb_scan,
-                                     timers_changed, dropin_changed, dropin_result };
+                                     timers_changed, dropin_changed, dropin_result, button };

@@ -113,7 +113,11 @@ async def main():
         os.makedirs(os.path.join(state, "models", m)); open(os.path.join(state, "models", m, "pryon.manifest"), "w").close()
     with open(mdns, "w") as f:                          # what main.sh does at boot
         subprocess.run([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-S"], env=env, stdout=f, check=True)
-    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB)], env=env)
+    keypad = os.path.join(state, "event1"); os.mkfifo(keypad)          # the keypad: input events written here (-b)
+    keypad_fd = os.open(keypad, os.O_RDWR)                                 # a writer before the reader's open, or it would wait
+    EV_KEY, KEY_VOLUMEDOWN, KEY_VOLUMEUP, KEY_HELP = 1, 114, 115, 138
+    def press(code, value): os.write(keypad_fd, struct.pack("qqHHi", 0, 0, EV_KEY, code, value))    # struct input_event, x86_64
+    proc = subprocess.Popen([f"{ROOT}/build/hassmic-host", "-P", "esphome", "-p", str(PORT), "-n", "Echo Dot", "-L", "-W", str(WEB), "-b", keypad], env=env)
     httpd = ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     await until(lambda: port_open(PORT) and port_open(WEB))
@@ -575,6 +579,18 @@ async def main():
             return n, {x.object_id: x for x in e}, sts
         # sound detection: off by default, no entity; on, one event entity reporting what the detector hears (here
         # sound_none.c's dog, once per ~10 s window of the capture), kept in the settings file
+        # the top buttons: one event entity, always there, a type per key and per hold of it, in addition to what the
+        # key does on the Echo (here the volume keys: the action button would start a pipeline)
+        bev = by.get("button")
+        check(isinstance(bev, EventInfo) and bev.device_class == "button"
+              and list(bev.event_types) == ["action", "action_hold", "volume_up", "volume_up_hold", "volume_down", "volume_down_hold"],
+              f"button event entity listed: {list(bev.event_types) if bev else None}")
+        press(KEY_VOLUMEDOWN, 1); await asyncio.sleep(0.1); press(KEY_VOLUMEDOWN, 0)
+        press(KEY_VOLUMEUP, 1); await asyncio.sleep(1.4); press(KEY_VOLUMEUP, 0)
+        bevs = lambda: [x.event_type for x in st3 if isinstance(x, Event) and bev and x.key == bev.key]
+        await until(lambda: len(bevs()) >= 3)
+        check(bevs() == ["volume_down", "volume_up", "volume_up_hold"], f"a press and a hold of the volume keys arrive as button events: {bevs()}")
+        st3[:] = [x for x in st3 if not isinstance(x, Event)]
         check("sound" not in by and "sound_detection" not in by and pv("sound_detection") == 0, "sound detection off by default: no entity in Home Assistant")
         page.set(sound_detection="on")
         c, cby, st3 = await relist(c)
@@ -725,7 +741,7 @@ async def main():
         check(not os.path.exists(mreq), "Home Assistant connected: no more announcements")
         await c.disconnect()
     finally:
-        proc.terminate(); httpd.shutdown()
+        proc.terminate(); httpd.shutdown(); os.close(keypad_fd)
         for f in (play, settings):
             if os.path.exists(f): os.unlink(f)
     print("FAILED" if check.failed else "all good")

@@ -54,6 +54,11 @@ Legend: `[x]` done, `[~]` partly done (note says what is missing), `[ ]` open. *
 - [x] Deployment scripts: `scripts/deploy.sh`, `scripts/probe.sh`, `scripts/capture-test.sh`, `scripts/device/alexa-{off,on}.sh`
 - [x] Action button = manual trigger; mic-mute latch blocks triggers and drives the LED (`src/hassmic/buttons.c`)
 - [x] Volume buttons → `MainVolume` + LED volume step (switch off with `-V` if a stock daemon already does it)
+- [x] Buttons as events for HA (user request 2026-10-11, issue #26): ESPHome event entity "Button", `action`/`volume_up`/
+      `volume_down` on the press and `<key>_hold` once down 1 s (`HOLD_MS`; the reader polls with the hold as timeout, so
+      a hold is reported while the key is still down and letting go afterwards is not a press; key repeat ignored), in
+      addition to the key's own job. `tests/unit/buttons_test.c` drives `buttons.c` through a FIFO; `fake_ha_esphome.py`
+      feeds the host build's `-b` keypad the same way. Mute stays the switch.
 - [x] Barge-in: wake word or button while speaking cuts TTS and opens a new pipeline (tested: 0.10 s on PC)
 - [x] Cancel while listening/thinking (user request 2026-10-03, as a VPE's center button): button sends
       `VoiceAssistantRequest start=false` (ESPHome's `voice_assistant.stop`; HA `_abort_pipeline` cancels the pipeline task,

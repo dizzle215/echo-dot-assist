@@ -4,6 +4,12 @@ What changed for people using the Echo, newest first. Details and measurements a
 
 ## 2026-10-11
 
+- **The top buttons as Home Assistant events**: a "Button" event entity reports `action`, `volume_up` and `volume_down`
+  for a press and `action_hold`, `volume_up_hold`, `volume_down_hold` once a key has been down for a second, so
+  automations can act on the buttons too (stop the music, silence an alarm the automation runs, next track on a held
+  volume key). The keys keep doing what they did on the Echo itself; the events come in addition, and the longer
+  gestures (the reset at 10 s, both volume keys for pairing) are unchanged. The mute button stays the "Mute" switch.
+  ESPHome only.
 - **The light ring points at you again while you speak** (issue #22). After the wake word, Amazon's software turns
   the light-blue part of the ring towards whoever spoke; with hassmic it always sat in the same place. Amazon's ring
   only turns two of its animations, and hassmic used a look-alike that never turns. As with Amazon's software, the

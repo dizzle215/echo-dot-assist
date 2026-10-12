@@ -1,5 +1,6 @@
 #include "buttons.h"
 #include "board.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
 #include <poll.h>
@@ -8,7 +9,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define SHORT_PRESS_MS 1000            /* acebuttond sees the holds too: 5 s its setup mode, 21 s its factory reset */
+/* HOLD_MS (buttons.h) ends a press; acebuttond sees the holds too: 5 s its setup mode, 21 s its factory reset */
 #define HOLD_WARN_MS   5000            /* action button held: the ring warns ... */
 #define HOLD_RESET_MS 10000            /* ... and then hassmic's reset (core_reset), long before acebuttond's 21 s */
 #define COMBO_MS       2000            /* both volume keys: stock gives that no meaning (acebuttond's are action holds) */
@@ -72,25 +73,50 @@ static long long now_ms(void)
 static void *reader(void *arg)
 {
     int rfd = (int)(long)arg;
-    struct input_event ev; long long action_down = 0, up_down = 0, dn_down = 0; int combo_done = 0, held = 0;
+    struct input_event ev;
+    long long action_down = 0, up_down = 0, dn_down = 0;        /* when each key went down, 0 = up */
+    int combo_done = 0, held = 0;                                /* pairing gesture reported; reset stage reported (1, 2) */
+    int action_held = 0, up_held = 0, dn_held = 0;               /* the 1 s hold of each key reported, or ruled out */
     for (;;) {
-        /* while the action button is down, wake for its hold stages: the key repeats only as long as acebuttond's
-         * configuration says, not something to count on */
-        if (action_down && handler.hold && held < 2) {
-            long long t = now_ms() - action_down, due = (held ? HOLD_RESET_MS : HOLD_WARN_MS) - t;
+        /* Wake for whatever comes due first while keys are down: a key's 1 s hold, the action button's reset stages,
+         * the two-key pairing gesture.  The kernel's key repeat only lasts as long as acebuttond's configuration says,
+         * so none of it is timed by repeats. */
+        long long now = now_ms(), due = -1;
+#define DUE(t) do { long long _d = (t); if (_d < 0) _d = 0; if (due < 0 || _d < due) due = _d; } while (0)
+        if (action_down) {
+            if (!action_held) DUE(action_down + HOLD_MS - now);
+            if (handler.hold && held < 2) DUE(action_down + (held ? HOLD_RESET_MS : HOLD_WARN_MS) - now);
+        }
+        if (up_down && !up_held) DUE(up_down + HOLD_MS - now);
+        if (dn_down && !dn_held) DUE(dn_down + HOLD_MS - now);
+        if (up_down && dn_down && !combo_done) DUE((up_down > dn_down ? up_down : dn_down) + COMBO_MS - now);
+#undef DUE
+        if (due >= 0) {
             struct pollfd p = { rfd, POLLIN, 0 };
-            if (due > 0 && poll(&p, 1, (int)due) == 0) continue;            /* woke for the stage: looked at below */
-            if (due <= 0) { held++; handler.hold(held); continue; }
+            int r = poll(&p, 1, (int)due);
+            if (r < 0) { if (errno == EINTR) continue; break; }
+            if (r == 0) {                                        /* something came due: report it, then look again */
+                now = now_ms();
+                if (action_down && !action_held && now - action_down >= HOLD_MS) { action_held = 1; if (handler.action_hold) handler.action_hold(); }
+                if (action_down && handler.hold && held < 2 && now - action_down >= (held ? HOLD_RESET_MS : HOLD_WARN_MS)) { held++; handler.hold(held); }
+                /* a volume key's hold, unless the other one is down too: that is the pairing gesture, not a hold */
+                if (up_down && !up_held && now - up_down >= HOLD_MS) { up_held = 1; if (!dn_down && handler.volume_hold) handler.volume_hold(1); }
+                if (dn_down && !dn_held && now - dn_down >= HOLD_MS) { dn_held = 1; if (!up_down && handler.volume_hold) handler.volume_hold(-1); }
+                if (up_down && dn_down && !combo_done && now - (up_down > dn_down ? up_down : dn_down) >= COMBO_MS) { combo_done = 1; if (handler.pair) handler.pair(); }
+                continue;
+            }
         }
         if (read(rfd, &ev, sizeof ev) != sizeof ev) break;
         if (ev.type != EV_KEY) continue;
         switch (ev.code) {
         case KEY_HELP:
-            if (ev.value == 1) { action_down = now_ms(); held = 0; }
+            if (ev.value == 1) { action_down = now_ms(); held = 0; action_held = 0; }
             else if (ev.value == 0) {
-                if (action_down && now_ms() - action_down < SHORT_PRESS_MS && handler.action) handler.action();
+                /* a press only when let go within HOLD_MS; a hold that came due as the key went up is still a hold */
+                if (action_down && !action_held && now_ms() - action_down >= HOLD_MS) { action_held = 1; if (handler.action_hold) handler.action_hold(); }
+                if (action_down && !action_held && handler.action) handler.action();
                 if (held == 1 && handler.hold) handler.hold(0);
-                action_down = 0; held = 0;
+                action_down = 0; held = 0; action_held = 0;
             }
             break;
         case KEY_MUTE:
@@ -108,11 +134,11 @@ static void *reader(void *arg)
         case KEY_VOLUMEUP:
         case KEY_VOLUMEDOWN: {
             long long *down = ev.code == KEY_VOLUMEUP ? &up_down : &dn_down;
+            int *heldp = ev.code == KEY_VOLUMEUP ? &up_held : &dn_held;
             if (ev.value == 1 && handler.volume)       /* press only; key repeat (2) would run away */ handler.volume(ev.code == KEY_VOLUMEUP ? 1 : -1);
-            if (ev.value == 1) *down = now_ms();
-            else if (ev.value == 0) { *down = 0; combo_done = 0; }
-            /* both held: the repeats of the later one (every 150 ms) tell us when 2 s have passed; the two presses
-             * changed the volume by one step each way */
+            if (ev.value == 1) { *down = now_ms(); *heldp = 0; }
+            else if (ev.value == 0) { *down = 0; *heldp = 0; combo_done = 0; }
+            /* both held 2 s: the pairing gesture (timed above; the two presses changed the volume by one step each way) */
             long long later = up_down > dn_down ? up_down : dn_down;
             if (up_down && dn_down && !combo_done && now_ms() - later >= COMBO_MS && handler.pair) { combo_done = 1; handler.pair(); }
         } break;

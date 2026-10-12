@@ -200,6 +200,11 @@ Beyond the README's two figures:
 
 - **Action**: cancelling works while Home Assistant still listens or thinks, as on a Voice PE; the wake word then
   cancels too and listens again (ESPHome only).
+- **Every press reaches Home Assistant** as the "Button" event entity: `action`, `volume_up`, `volume_down`, and
+  `action_hold`, `volume_up_hold`, `volume_down_hold` once the key has been down for a second (reported while it is still
+  down; letting go after a hold is not a press). In addition to what the key does on the Echo, so an automation can
+  stop music or silence an alarm it runs on the action button, or skip a track on a held volume key. The mute button
+  is the "Mute" switch instead. The 5 s / 10 s reset hold and the two-key pairing gesture are not reported as holds.
 - **Microphone off** plays Alexa's own sounds.
 - Silent and dark at boot.
 - The ring dims with the room's light as on a stock Echo (Amazon's own logic, on by default); a fixed level from Home
@@ -256,6 +261,7 @@ While a phone plays, the proxy stops scanning: the radio cannot do both without 
 | Equalizer | bass, mid, treble, −6 to +6 dB, Amazon's own, on everything the Echo plays |
 | LED auto brightness, LED brightness | a level holds the ring there and switches the automatic off |
 | Illuminance | the Echo's light sensor in lux, for automations |
+| Button | event: `action`, `volume_up`, `volume_down` for a press, `action_hold`, `volume_up_hold`, `volume_down_hold` once a key has been down for a second; the keys keep their own jobs, see [Buttons](#buttons-and-light-ring) |
 | Timer ringing, Ringing timers | on while a finished timer rings; their names (diagnostic), see [Voice](#voice) |
 | Stop ringing | button: ends a ringing timer and nothing else |
 | Firmware | update entity, see [Updating](../README.md#updating) |
